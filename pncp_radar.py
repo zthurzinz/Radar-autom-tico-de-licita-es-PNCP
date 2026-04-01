@@ -6,16 +6,16 @@ from datetime import date, timedelta
 from typing import List, Dict, Any
 
 # =========================
-# CONFIGURAÇÃO
+# CONFIGURAÇÃO COMERCIAL
 # =========================
 
 API_BASE = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
 TIMEOUT = 60
 PAGE_SIZE = 50
-DIAS_ATRAS = 60
+DIAS_ATRAS = 60  # Puxando os últimos 2 meses
 DELAY = 0.4
 
-# Municípios (IBGE)
+# Municípios foco da Faus Engenharia
 MUNICIPIOS = [
     3524709,  # São José do Rio Preto
     3543402,  # Mirassol
@@ -27,46 +27,30 @@ MUNICIPIOS = [
     3549805,  # Olímpia
 ]
 
-# Modalidades
 MODALIDADES = [4, 5, 6, 7]
 
-# Palavras-chave
+# Filtros de Ouro (Infraestrutura e Locação)
 HIGH_PRIORITY = [
-    "terraplenagem", "terraplanagem",
-    "escavação", "escavacao",
+    "terraplenagem", "terraplanagem", "escavação", "escavacao",
     "drenagem", "galeria pluvial", "rede pluvial",
-    "pavimentação", "pavimentacao",
+    "pavimentação", "pavimentacao", "asfáltica", "asfaltica", "recapeamento",
     "retroescavadeira", "locação de maquina", "locacao de maquina",
-    "fundações", "fundacoes",
-    "infraestrutura",
-    "aterro", "compactação", "compactacao",
+    "fundações", "fundacoes", "guias e sarjetas", "infraestrutura urbana"
 ]
 
-MEDIUM_PRIORITY = [
-    "ubs", "escola", "creche",
-    "construção", "construcao",
-    "execução", "execucao",
-    "ampliação", "ampliacao",
-    "obra civil",
-]
-
+# Palavras que tiram pontos (Marmitex, TI, Alimentos)
 LOW_PRIORITY = [
-    "reforma", "manutenção", "manutencao",
-    "fornecimento de material",
-    "aquisição", "aquisicao",
-    "medicamentos", "equipamentos de informática",
-    "mobiliário", "mobiliario",
-    "material de consumo",
-    "limpeza urbana",
+    "alimento", "marmitex", "refeição", "merenda", "escola", "creche",
+    "informática", "software", "medicamentos", "limpeza urbana"
 ]
 
-OUTPUT_CSV = "pncp_oportunidades.csv"
+OUTPUT_REPORT = "relatorio_obras_faus.txt"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
 # =========================
-# FUNÇÕES
+# FUNÇÕES DE INTELIGÊNCIA
 # =========================
 
 def normalize(text: str) -> str:
@@ -74,50 +58,17 @@ def normalize(text: str) -> str:
 
 def score_text(text: str):
     txt = normalize(text)
+    
+    # Se contiver palavras irrelevantes, descarta (prioridade C)
+    if any(w in txt for w in LOW_PRIORITY):
+        return "C", 0, ""
 
-    high_hits = [w for w in HIGH_PRIORITY if normalize(w) in txt]
-    medium_hits = [w for w in MEDIUM_PRIORITY if normalize(w) in txt]
-    low_hits = [w for w in LOW_PRIORITY if normalize(w) in txt]
+    high_hits = [w for w in HIGH_PRIORITY if w in txt]
+    score = len(high_hits) * 5
 
-    score = len(high_hits) * 4 + len(medium_hits) * 2 - len(low_hits) * 3
-
-    if score >= 6:
-        prioridade = "A"
-    elif score >= 2:
-        prioridade = "B"
-    else:
-        prioridade = "C"
-
-    return prioridade, score, ", ".join(high_hits), ", ".join(medium_hits), ", ".join(low_hits)
-
-def extract_items(payload: Any):
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, dict):
-        for key in ["data", "items", "resultado", "content"]:
-            if isinstance(payload.get(key), list):
-                return payload[key]
-    return []
-
-def extract_text(item: Dict[str, Any]) -> str:
-    parts = [
-        item.get("objetoCompra"),
-        item.get("objetoContratacao"),
-        item.get("descricao"),
-        item.get("informacaoComplementar"),
-        item.get("titulo"),
-    ]
-    return " | ".join(str(p) for p in parts if p)
-
-def build_web_link(item: Dict[str, Any]) -> str:
-    org = item.get("orgaoEntidade") or {}
-    cnpj = org.get("cnpj") or item.get("cnpj", "")
-    ano = item.get("anoCompra") or item.get("anoContratacao", "")
-    seq = item.get("sequencialCompra") or item.get("sequencialContratacao")
-
-    if cnpj and ano and seq is not None:
-        return f"https://pncp.gov.br/app/editais/{cnpj}/{ano}/{str(seq).zfill(6)}"
-    return item.get("linkSistemaOrigem", "")
+    if score >= 5:
+        return "⭐ ALTA (Ouro)", score, ", ".join(high_hits).upper()
+    return "C", 0, ""
 
 def fetch_page(data_inicial, data_final, modalidade, municipio, pagina, max_tentativas=3):
     params = {
@@ -134,121 +85,87 @@ def fetch_page(data_inicial, data_final, modalidade, municipio, pagina, max_tent
         try:
             r = requests.get(API_BASE, params=params, timeout=TIMEOUT)
             r.raise_for_status()
-
-            # Corpo vazio com status 200 = sem dados, pragmático, sai sem retry
-            if not r.text.strip():
-                return []
-
-            # Tenta parsear JSON
+            if not r.text.strip(): return []
             return r.json()
-
-        except ValueError:
-            # JSON inválido. Captura status e tipo para tirar o achismo do log
-            log.warning(f"Tentativa {tentativa}/{max_tentativas} | municipio={municipio} | mod={modalidade} | JSON inválido | status={r.status_code} | content={r.headers.get('Content-Type')}")
-        except requests.exceptions.RequestException as e:
-            # Timeout, conexão recusada, 500, etc = retry
-            log.warning(f"Tentativa {tentativa}/{max_tentativas} | municipio={municipio} | mod={modalidade} | {type(e).__name__}")
-        
-        if tentativa < max_tentativas:
-            # Backoff progressivo: espera 2s na primeira falha, 4s na segunda...
-            time.sleep(2 * tentativa)
-
-    log.error(f"Desistindo: municipio={municipio} | modalidade={modalidade} | pag={pagina}")
+        except Exception:
+            if tentativa < max_tentativas: time.sleep(2 * tentativa)
     return {}
 
-def search_all(data_inicial: str, data_final: str) -> List[Dict[str, Any]]:
-    rows = []
+def search_all(data_inicial: str, data_final: str):
+    opportunities = []
 
     for municipio in MUNICIPIOS:
         for modalidade in MODALIDADES:
             pagina = 1
-
             while True:
-                try:
-                    payload = fetch_page(data_inicial, data_final, modalidade, municipio, pagina)
-                except Exception as e:
-                    log.error(f"Erro | municipio={municipio} | modalidade={modalidade} | pag={pagina} | {e}")
-                    break
-
-                items = extract_items(payload)
-                if not items:
-                    break
+                payload = fetch_page(data_inicial, data_final, modalidade, municipio, pagina)
+                items = []
+                if isinstance(payload, dict):
+                    items = payload.get("resultado", []) or payload.get("data", [])
+                
+                if not items: break
 
                 for item in items:
-                    texto = extract_text(item)
-                    if not texto:
-                        continue
-
-                    prioridade, score, high, med, low = score_text(texto)
-                    if prioridade == "C":
-                        continue
-
                     unidade = item.get("unidadeOrgao") or {}
+                    texto_completo = f"{item.get('objetoCompra','')} {item.get('descricao','')}"
+                    status, score, sinais = score_text(texto_completo)
 
-                    rows.append({
-                        "prioridade": prioridade,
-                        "score": score,
-                        "cidade": unidade.get("municipioNome", ""),
-                        "uf": unidade.get("ufSigla", ""),
-                        "data_publicacao": item.get("dataPublicacaoPncp", ""),
-                        "valor_estimado": item.get("valorTotalEstimado", ""),
-                        "sinais_fortes": high,
-                        "sinais_medios": med,
-                        "sinais_fracos": low,
-                        "numero_pncp": item.get("numeroControlePNCP", ""),
-                        "link": build_web_link(item),
-                        "texto": texto,
+                    if status == "C": continue
+
+                    opportunities.append({
+                        "status": status,
+                        "cidade": unidade.get("municipioNome", "N/A").upper(),
+                        "valor": item.get("valorTotalEstimado", 0),
+                        "data": item.get("dataPublicacaoPncp", "")[:10],
+                        "sinais": sinais,
+                        "link": f"https://pncp.gov.br/app/editais/{item.get('orgaoEntidade', {}).get('cnpj', '')}/{item.get('anoCompra', '')}/{str(item.get('sequencialCompra', '')).zfill(6)}",
+                        "resumo": texto_completo[:400]
                     })
 
-                total_paginas = payload.get("totalPaginas", 1)
-                if pagina >= total_paginas:
-                    break
-
+                if pagina >= payload.get("totalPaginas", 1): break
                 pagina += 1
                 time.sleep(DELAY)
 
-    return rows
+    return opportunities
 
-def deduplicate(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    seen = {}
-    for row in rows:
-        key = row["numero_pncp"] or row["link"] or row["texto"][:100]
-        if key not in seen or row["score"] > seen[key]["score"]:
-            seen[key] = row
-    return list(seen.values())
-
-def save_csv(rows: List[Dict[str, Any]]) -> None:
-    if not rows:
-        log.info("Nenhum resultado para salvar.")
-        return
-
-    fieldnames = [
-        "prioridade", "score", "cidade", "uf", "data_publicacao", "valor_estimado",
-        "sinais_fortes", "sinais_medios", "sinais_fracos",
-        "numero_pncp", "link", "texto"
+def generate_visual_report(opportunities):
+    hoje = date.today().strftime("%d/%m/%Y")
+    lines = [
+        "===========================================================\n",
+        f"   RELATÓRIO DE OPORTUNIDADES - FAUS ENGENHARIA\n",
+        f"   DATA DO RELATÓRIO: {hoje}\n",
+        "===========================================================\n\n"
     ]
 
-    with open(OUTPUT_CSV, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+    if not opportunities:
+        lines.append("Nenhuma obra relevante encontrada no período.\n")
+    else:
+        # Ordena pelas mais recentes
+        opportunities.sort(key=lambda x: x['data'], reverse=True)
+        
+        for op in opportunities:
+            lines.append(f"📍 CIDADE: {op['cidade']}\n")
+            lines.append(f"📊 STATUS: {op['status']}\n")
+            lines.append(f"📅 DATA PUBLICAÇÃO: {op['data']}\n")
+            lines.append(f"💰 VALOR ESTIMADO: R$ {op['valor']:,.2f}\n")
+            lines.append(f"🛠 SERVIÇOS DETECTADOS: {op['sinais']}\n")
+            lines.append(f"📝 RESUMO: {op['resumo']}...\n")
+            lines.append(f"🔗 LINK DIRETO: {op['link']}\n")
+            lines.append("-" * 60 + "\n\n")
 
-    log.info(f"CSV salvo: {OUTPUT_CSV}")
+    with open(OUTPUT_REPORT, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+    log.info(f"Relatório visual gerado: {OUTPUT_REPORT}")
 
 def main():
     hoje = date.today()
-    # Formato de data ajustado para YYYYMMDD (sem hífens)
     data_final = hoje.strftime("%Y%m%d")
     data_inicial = (hoje - timedelta(days=DIAS_ATRAS)).strftime("%Y%m%d")
 
-    log.info(f"Iniciando busca | período: {data_inicial} → {data_final}")
+    log.info(f"Iniciando Radar Faus | Período: {data_inicial} → {data_final}")
 
-    rows = search_all(data_inicial, data_final)
-    rows = deduplicate(rows)
-    rows.sort(key=lambda x: x["score"], reverse=True)
-
-    log.info(f"Resultados úteis: {len(rows)}")
-    save_csv(rows)
+    results = search_all(data_inicial, data_final)
+    generate_visual_report(results)
 
 if __name__ == "__main__":
     main()
