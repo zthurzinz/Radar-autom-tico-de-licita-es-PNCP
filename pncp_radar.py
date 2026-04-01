@@ -215,8 +215,9 @@ def save_csv(rows: List[Dict[str, Any]]) -> None:
 
 def main():
     hoje = date.today()
-    data_final = hoje.strftime("%Y-%m-%d")
-    data_inicial = (hoje - timedelta(days=DIAS_ATRAS)).strftime("%Y-%m-%d")
+    # CORREÇÃO: Formato de data ajustado para YYYYMMDD (sem hífens)
+    data_final = hoje.strftime("%Y%m%d")
+    data_inicial = (hoje - timedelta(days=DIAS_ATRAS)).strftime("%Y%m%d")
 
     log.info(f"Iniciando busca | período: {data_inicial} → {data_final}")
 
