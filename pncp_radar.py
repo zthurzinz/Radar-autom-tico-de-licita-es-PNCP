@@ -119,7 +119,7 @@ def build_web_link(item: Dict[str, Any]) -> str:
         return f"https://pncp.gov.br/app/editais/{cnpj}/{ano}/{str(seq).zfill(6)}"
     return item.get("linkSistemaOrigem", "")
 
-def fetch_page(data_inicial, data_final, modalidade, municipio, pagina):
+def fetch_page(data_inicial, data_final, modalidade, municipio, pagina, max_tentativas=3):
     params = {
         "dataInicial": data_inicial,
         "dataFinal": data_final,
@@ -130,9 +130,31 @@ def fetch_page(data_inicial, data_final, modalidade, municipio, pagina):
         "tamanhoPagina": PAGE_SIZE,
     }
 
-    r = requests.get(API_BASE, params=params, timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json()
+    for tentativa in range(1, max_tentativas + 1):
+        try:
+            r = requests.get(API_BASE, params=params, timeout=TIMEOUT)
+            r.raise_for_status()
+
+            # Corpo vazio com status 200 = sem dados, pragmático, sai sem retry
+            if not r.text.strip():
+                return []
+
+            # Tenta parsear JSON
+            return r.json()
+
+        except ValueError:
+            # JSON inválido. Captura status e tipo para tirar o achismo do log
+            log.warning(f"Tentativa {tentativa}/{max_tentativas} | municipio={municipio} | mod={modalidade} | JSON inválido | status={r.status_code} | content={r.headers.get('Content-Type')}")
+        except requests.exceptions.RequestException as e:
+            # Timeout, conexão recusada, 500, etc = retry
+            log.warning(f"Tentativa {tentativa}/{max_tentativas} | municipio={municipio} | mod={modalidade} | {type(e).__name__}")
+        
+        if tentativa < max_tentativas:
+            # Backoff progressivo: espera 2s na primeira falha, 4s na segunda...
+            time.sleep(2 * tentativa)
+
+    log.error(f"Desistindo: municipio={municipio} | modalidade={modalidade} | pag={pagina}")
+    return {}
 
 def search_all(data_inicial: str, data_final: str) -> List[Dict[str, Any]]:
     rows = []
@@ -215,7 +237,7 @@ def save_csv(rows: List[Dict[str, Any]]) -> None:
 
 def main():
     hoje = date.today()
-    # CORREÇÃO: Formato de data ajustado para YYYYMMDD (sem hífens)
+    # Formato de data ajustado para YYYYMMDD (sem hífens)
     data_final = hoje.strftime("%Y%m%d")
     data_inicial = (hoje - timedelta(days=DIAS_ATRAS)).strftime("%Y%m%d")
 
