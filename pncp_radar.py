@@ -12,7 +12,7 @@ from typing import List, Dict, Any
 API_BASE = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
 TIMEOUT = 60
 PAGE_SIZE = 50
-DIAS_ATRAS = 2
+DIAS_ATRAS = 60
 DELAY = 0.4
 
 # Municípios (IBGE)
