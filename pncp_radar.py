@@ -20,10 +20,10 @@ MUNICIPIOS = [
     3505302, 3518602, 3533502, 3514403, 3531100, 3516408, 3542206, 3521101
 ]
 
-# Termos normalizados (sem acento para busca cega)
-OBRA_NOVA = ["construcao", "implantacao", "execucao de obra", "unidade basica", "ubs", "creche", "escola"]
-TERRA_PESADA = ["terraplenagem", "terraplanagem", "escavacao", "drenagem", "limpeza de terreno", "demolicao", "aterro", "valas"]
-FILTRO_LIXO = ["marmitex", "alimento", "merenda", "informatica", "roçada", "poda"]
+# Termos normalizados mais abrangentes para prospecção
+OBRA_NOVA = ["construcao", "implantacao", "execucao de obra", "unidade basica", "ubs", "creche", "escola", "ampliacao", "pavimentacao"]
+TERRA_PESADA = ["terraplenagem", "terraplanagem", "escavacao", "drenagem", "limpeza de terreno", "demolicao", "aterro", "valas", "fundacao", "infraestrutura"]
+FILTRO_LIXO = ["marmitex", "alimento", "merenda", "informatica", "roçada", "poda", "limpeza urbana", "aquisicao de", "aquisição de", "registro de preco", "fornecimento de material", "compra de tubos", "aquisicao de tubos"]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
