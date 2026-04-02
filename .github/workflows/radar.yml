@@ -23,9 +23,11 @@ jobs:
       - name: Executar Radar Faus Engenharia
         run: python pncp_radar.py
 
-      - name: Upload do Relatorio Final
+      - name: Upload dos Resultados Faus
         uses: actions/upload-artifact@v4
         with:
-          name: relatorio-faus-final
-          path: relatorio_obras_faus.txt
+          name: prospeccao-faus-final
+          path: |
+            radar_faus_completo.csv
+            relatorio_leitura_faus.txt
           retention-days: 30
